@@ -61,6 +61,14 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/**", "/api/webhooks/**")
                         .permitAll()
 
+                        // Admin-only listing APIs must be matched before public GET APIs
+                        .requestMatchers(
+                                "/api/movies/admin",
+                                "/api/theatres/admin",
+                                "/api/shows/admin"
+                        )
+                        .hasRole("ADMIN")
+
                         // Public GET APIs
                         .requestMatchers(
                                 HttpMethod.GET,

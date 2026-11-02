@@ -31,13 +31,24 @@ public interface ShowSeatRepo extends JpaRepository<ShowSeat, Long> {
 
     @Query(value = """
             
-                SELECT DISTINCT ss.*
+            SELECT ss.*
             FROM show_seats ss
-            JOIN booking_seats bs ON ss.id = bs.show_seat_id
-            JOIN bookings b ON bs.booking_id = b.id
-            WHERE b.status IN ('EXPIRED', 'FAILED', 'PAYMENT_UNRESOLVED')
-              AND ss.status = 'HELD'
+            WHERE ss.status = 'HELD'
               AND ss.hold_expires_at <= NOW()
+              AND (
+                  EXISTS (
+                      SELECT 1
+                      FROM booking_seats bs
+                      JOIN bookings b ON bs.booking_id = b.id
+                      WHERE bs.show_seat_id = ss.id
+                        AND b.status IN ('EXPIRED', 'FAILED', 'PAYMENT_UNRESOLVED')
+                  )
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM booking_seats bs
+                      WHERE bs.show_seat_id = ss.id
+                  )
+              )
             """, nativeQuery = true)
     List<ShowSeat> findExpiredHeldSeats();
 }

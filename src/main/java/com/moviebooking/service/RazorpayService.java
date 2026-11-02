@@ -13,10 +13,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -28,6 +25,9 @@ public class RazorpayService {
 
     @Value("${razorpay.key.secret}")
     private String keySecret;
+
+    @Value("${razorpay.webhook.secret:}")
+    private String webhookSecret;
 
 
     public RazorpayService(RazorpayClient razorpayClient) {
@@ -115,44 +115,6 @@ public class RazorpayService {
     }
 
 
-    private String generateSignature(
-            String payload,
-            String secret) throws Exception {
-
-        Mac mac = Mac.getInstance("HmacSHA256");
-
-        SecretKeySpec secretKey =
-                new SecretKeySpec(
-                        secret.getBytes(StandardCharsets.UTF_8),
-                        "HmacSHA256"
-                );
-
-        mac.init(secretKey);
-
-        byte[] hash =
-                mac.doFinal(
-                        payload.getBytes(StandardCharsets.UTF_8)
-                );
-
-        StringBuilder hexString = new StringBuilder();
-
-        for (byte b : hash) {
-
-            String hex =
-                    Integer.toHexString(
-                            0xff & b
-                    );
-
-            if (hex.length() == 1) {
-                hexString.append('0');
-            }
-
-            hexString.append(hex);
-        }
-
-        return hexString.toString();
-    }
-
     public boolean checkPaymentStatus(String razorpayOrderId) {
         try{
             List<Payment> payments =
@@ -168,6 +130,60 @@ public class RazorpayService {
             return false;
         } catch (Exception e) {
             throw new ApplicationException("Razorpay exception", HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    public void refundCapturedPayment(String razorpayOrderId) {
+        try {
+            List<Payment> payments =
+                    razorpayClient.orders.fetchPayments(razorpayOrderId);
+
+            Payment capturedPayment = payments.stream()
+                    .filter(payment -> "captured".equals(payment.get("status")))
+                    .findFirst()
+                    .orElseThrow(() -> new ApplicationException(
+                            "No captured payment found for this booking",
+                            HttpStatus.CONFLICT
+                    ));
+
+            String paymentId = capturedPayment.get("id");
+            razorpayClient.payments.refund(paymentId);
+        } catch (ApplicationException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new ApplicationException(
+                    "Unable to initiate payment refund",
+                    HttpStatus.BAD_GATEWAY
+            );
+        }
+    }
+
+    public boolean verifyWebhookSignature(String payload, String signature) {
+        if (webhookSecret == null || webhookSecret.isBlank()) {
+            throw new ApplicationException(
+                    "Razorpay webhook secret is not configured",
+                    HttpStatus.INTERNAL_SERVER_ERROR
+            );
+        }
+
+        try {
+            return Utils.verifyWebhookSignature(payload, signature, webhookSecret);
+        } catch (Exception exception) {
+            throw new ApplicationException(
+                    "Unable to verify Razorpay webhook signature",
+                    HttpStatus.INTERNAL_SERVER_ERROR
+            );
+        }
+    }
+
+    public com.razorpay.Payment fetchPayment(String paymentId) {
+        try {
+            return razorpayClient.payments.fetch(paymentId);
+        } catch (Exception exception) {
+            throw new ApplicationException(
+                    "Unable to retrieve Razorpay payment",
+                    HttpStatus.BAD_GATEWAY
+            );
         }
     }
 }

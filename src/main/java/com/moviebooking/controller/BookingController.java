@@ -2,6 +2,7 @@ package com.moviebooking.controller;
 
 import com.moviebooking.dto.*;
 import com.moviebooking.service.BookingService;
+import com.moviebooking.service.PaymentService;
 import com.moviebooking.service.RazorpayService;
 import com.moviebooking.service.ReleaseSeatRequestDto;
 import jakarta.validation.Valid;
@@ -15,6 +16,7 @@ public class BookingController {
 
     private final BookingService bookingService;
     private final RazorpayService razorpayService;
+    private final PaymentService paymentService;
 
     @PostMapping("/hold")
     public void lockSeat(@RequestBody LockSeatRequestDto lockSeatRequest) {
@@ -30,15 +32,12 @@ public class BookingController {
 
     @PostMapping("/payment/verification")
     public BookingConfirmationResponse verifyPayment(
-            @Valid @RequestBody PaymentVerificationRequest request) {
+        @Valid @RequestBody PaymentVerificationRequest request) {
         razorpayService.verifyPayment(request);
-        if(razorpayService.checkPaymentStatus(request.getRazorpayOrderId())) {
-            return bookingService.finalizeBooking(
-                    request.getRazorpayOrderId()
-            );
-        } else{
-            return bookingService.releaseSeatsAfterPaymentFailure(request.getRazorpayOrderId());
-        }
+        return paymentService.processVerifiedPayment(
+                request.getRazorpayOrderId(),
+                request.getRazorpayPaymentId()
+        );
     }
 
     @GetMapping("/{bookingId}")

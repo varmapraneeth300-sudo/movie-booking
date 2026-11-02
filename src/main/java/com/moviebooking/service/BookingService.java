@@ -131,6 +131,7 @@ public class BookingService {
                         "Booking not found",
                         HttpStatus.NOT_FOUND
                 ));
+        ensureBookingOwner(booking, getUser());
 
         List<BookingSeatResponse> seats = bookingSeatRepo
                 .findByBooking(booking)
@@ -149,6 +150,15 @@ public class BookingService {
                 booking.getStatus(),
                 seats
         );
+    }
+
+    private void ensureBookingOwner(Booking booking, User user) {
+        if (!Objects.equals(booking.getUser().getId(), user.getId())) {
+            throw new ApplicationException(
+                    "You are not allowed to access this booking",
+                    HttpStatus.FORBIDDEN
+            );
+        }
     }
 
     private BookingSeatResponse mapToBookingSeatResponse(
@@ -173,6 +183,7 @@ public class BookingService {
                         "Booking not found",
                         HttpStatus.NOT_FOUND
                 ));
+        ensureBookingOwner(booking, getUser());
 
         if (booking.getStatus() == BookingStatus.CANCELLED) {
             throw new ApplicationException(
@@ -181,12 +192,22 @@ public class BookingService {
             );
         }
 
+        boolean refundRequired = booking.getStatus() == BookingStatus.CONFIRMED
+                || booking.getStatus() == BookingStatus.REFUND_REQUIRED;
+
+        if (refundRequired) {
+            razorpayService.refundCapturedPayment(booking.getRazorpayOrderId());
+        }
+
         List<BookingSeat> bookingSeats =
                 bookingSeatRepo.findByBooking(booking);
 
         for (BookingSeat bookingSeat : bookingSeats) {
-            bookingSeat.getShowSeat()
-                    .setStatus(ShowSeatStatus.AVAILABLE);
+            ShowSeat showSeat = bookingSeat.getShowSeat();
+            showSeat.setStatus(ShowSeatStatus.AVAILABLE);
+            showSeat.setHeldByUserId(null);
+            showSeat.setHoldExpiresAt(null);
+            showSeat.setHoldId(null);
         }
 
         booking.setStatus(BookingStatus.CANCELLED);
@@ -194,14 +215,15 @@ public class BookingService {
         return new CancelBookingResponse(
                 booking.getId(),
                 booking.getStatus(),
-                "Booking cancelled successfully"
+                refundRequired
+                        ? "Booking cancelled successfully. Refund initiated."
+                        : "Booking cancelled successfully"
         );
     }
 
     @Transactional
     public BookingConfirmationResponse finalizeBooking(
             String razorpayOrderId) {
-
 
         Booking booking = bookingRepo
                 .findByRazorpayOrderId(razorpayOrderId)
@@ -212,25 +234,41 @@ public class BookingService {
                         )
                 );
 
-        List<BookingSeat> bookingSeats =
-                bookingSeatRepo.findByBooking(booking);
+        return handleCapturedPayment(booking);
+    }
 
-        for (BookingSeat bookingSeat : bookingSeats) {
+    @Transactional
+    public BookingConfirmationResponse handleCapturedPayment(String razorpayOrderId) {
+        Booking booking = bookingRepo
+                .findByRazorpayOrderId(razorpayOrderId)
+                .orElseThrow(() -> new ApplicationException(
+                        "Booking not found",
+                        HttpStatus.NOT_FOUND
+                ));
 
-            ShowSeat showSeat =
-                    bookingSeat.getShowSeat();
-            showSeat.setHeldByUserId(null);
-            showSeat.setHoldExpiresAt(null);
-            showSeat.setHoldId(null);
-            showSeat.setStatus(ShowSeatStatus.BOOKED);
+        return handleCapturedPayment(booking);
+    }
+
+    private BookingConfirmationResponse handleCapturedPayment(Booking booking) {
+        if (booking.getStatus() == BookingStatus.PENDING) {
+            confirmBooking(booking.getId());
         }
 
-        booking.setStatus(BookingStatus.CONFIRMED);
+        if (booking.getStatus() == BookingStatus.PAYMENT_UNRESOLVED
+                || booking.getStatus() == BookingStatus.CANCELLED
+                || booking.getStatus() == BookingStatus.EXPIRED
+                || booking.getStatus() == BookingStatus.FAILED) {
+            booking.setStatus(BookingStatus.REFUND_REQUIRED);
+        }
+
+        String message = booking.getStatus() == BookingStatus.CONFIRMED
+                ? "Booking confirmed successfully"
+                : "Payment captured, but booking requires a refund";
 
         return new BookingConfirmationResponse(
                 booking.getId(),
                 booking.getRazorpayOrderId(),
-                "Booking confirmed successfully"
+                message
         );
     }
 
@@ -249,12 +287,24 @@ public class BookingService {
         List<BookingSeat> bookingSeats =
                 bookingSeatRepo.findByBooking(booking);
 
+        if (booking.getStatus() != BookingStatus.PENDING
+                && booking.getStatus() != BookingStatus.PAYMENT_UNRESOLVED) {
+            return new BookingConfirmationResponse(
+                    booking.getId(),
+                    booking.getRazorpayOrderId(),
+                    "Booking is already " + booking.getStatus()
+            );
+        }
+
         for (BookingSeat bookingSeat : bookingSeats) {
 
             ShowSeat showSeat =
                     bookingSeat.getShowSeat();
 
             showSeat.setStatus(ShowSeatStatus.AVAILABLE);
+            showSeat.setHeldByUserId(null);
+            showSeat.setHoldExpiresAt(null);
+            showSeat.setHoldId(null);
         }
         booking.setStatus(BookingStatus.FAILED);
 

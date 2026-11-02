@@ -11,7 +11,13 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "payments")
+@Table(
+        name = "payments",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_payment_provider_payment_id",
+                columnNames = {"provider", "provider_payment_id"}
+        )
+)
 @Getter
 @Setter
 @NoArgsConstructor

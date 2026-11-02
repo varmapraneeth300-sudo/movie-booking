@@ -5,11 +5,11 @@ import com.moviebooking.entity.Seat;
 import com.moviebooking.entity.Show;
 import com.moviebooking.entity.ShowSeat;
 import com.moviebooking.entity.User;
-import com.moviebooking.entity.enums.SeatType;
 import com.moviebooking.exception.ApplicationException;
 import com.moviebooking.repo.ShowRepo;
 import com.moviebooking.repo.ShowSeatRepo;
 import com.moviebooking.repo.UserRepo;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -38,26 +38,40 @@ public class ShowSeatService {
                         HttpStatus.NOT_FOUND
                 ));
 
+        Long currentUserId = getCurrentUserId();
+
         return showSeatRepo.findByShow(show)
                 .stream()
-                .map(this::mapToShowSeatResponse)
+                .map(showSeat -> mapToShowSeatResponse(showSeat, currentUserId))
                 .toList();
     }
 
-    User getUser() {
+    private Long getCurrentUserId() {
         Authentication authentication =
                 SecurityContextHolder
                         .getContext()
                         .getAuthentication();
 
+        if (authentication == null
+                || !authentication.isAuthenticated()
+                || authentication instanceof AnonymousAuthenticationToken) {
+            return null;
+        }
+
         String username = authentication.getName();
-        return userRepo.findByUsername(username).orElseThrow(() -> new ApplicationException("user not found", HttpStatus.NOT_FOUND));
+        return userRepo.findByUsername(username)
+                .map(User::getId)
+                .orElseThrow(() -> new ApplicationException(
+                        "User not found",
+                        HttpStatus.NOT_FOUND
+                ));
     }
 
-    private ShowSeatResponse mapToShowSeatResponse(ShowSeat showSeat) {
+    private ShowSeatResponse mapToShowSeatResponse(
+            ShowSeat showSeat,
+            Long currentUserId) {
 
         Seat seat = showSeat.getSeat();
-        User user = getUser();
 
         return new ShowSeatResponse(
                 showSeat.getId(),
@@ -68,7 +82,8 @@ public class ShowSeatService {
                 seat.getSeatType(),
                 (int) showSeat.getPrice(),
                 showSeat.getStatus(),
-                Objects.equals(showSeat.getHeldByUserId(), user.getId())
+                currentUserId != null
+                        && Objects.equals(showSeat.getHeldByUserId(), currentUserId)
         );
     }
 }
