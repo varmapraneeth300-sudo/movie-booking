@@ -5,9 +5,11 @@ import com.moviebooking.entity.Booking;
 import com.moviebooking.entity.BookingSeat;
 import com.moviebooking.entity.ShowSeat;
 import com.moviebooking.entity.enums.BookingStatus;
+import com.moviebooking.exception.ApplicationException;
 import com.moviebooking.repo.BookingRepo;
 import com.moviebooking.repo.BookingSeatRepo;
 import com.moviebooking.service.BookingService;
+import com.moviebooking.service.PaymentService;
 import com.razorpay.Order;
 import com.razorpay.Payment;
 import com.razorpay.RazorpayClient;
@@ -30,6 +32,7 @@ public class PaymentReconciler {
     private final BookingSeatRepo bookingSeatRepo;
     private final RazorpayClient razorpayClient;
     private final BookingService bookingService;
+    private final PaymentService paymentService;
 
     @Scheduled(fixedDelay = 60000)
     public void reconcilePayments() {
@@ -69,12 +72,13 @@ public class PaymentReconciler {
                     boolean allPaymentsFailed = !payments.isEmpty();
 
                     for (Payment payment : payments) {
+                        paymentService.processReconciledPayment(orderId, payment);
 
                         String paymentStatus = payment.get("status");
 
                         if ("captured".equals(paymentStatus)) {
                             captured = true;
-                            break;
+                            continue;
                         }
 
                         if ("created".equals(paymentStatus)
@@ -87,15 +91,7 @@ public class PaymentReconciler {
                         }
                     }
 
-                    if (captured) {
-
-                        if (unresolved) {
-                            bookingService.markRefundRequired(booking.getId());
-                        } else {
-                            bookingService.confirmBooking(booking.getId());
-                        }
-
-                    } else if (allPaymentsFailed) {
+                    if (!captured && allPaymentsFailed) {
 
                         if (unresolved) {
                             bookingService.markUnresolvedPaymentFailed(booking.getId());
@@ -103,7 +99,7 @@ public class PaymentReconciler {
                             bookingService.expireBooking(booking.getId());
                         }
 
-                    } else if (paymentInProgress) {
+                    } else if (!captured && paymentInProgress) {
 
                         if (!unresolved && isHoldExpired(booking)) {
                             bookingService.markPaymentUnresolved(
@@ -113,13 +109,21 @@ public class PaymentReconciler {
 
                         // If already unresolved, keep checking Razorpay.
                     }
-
                 } else if ("paid".equals(orderStatus)) {
-
-                    if (unresolved) {
-                        bookingService.markRefundRequired(booking.getId());
-                    } else {
-                        bookingService.confirmBooking(booking.getId());
+                    List<Payment> payments =
+                            razorpayClient.orders.fetchPayments(orderId);
+                    boolean captured = false;
+                    for (Payment payment : payments) {
+                        paymentService.processReconciledPayment(orderId, payment);
+                        if ("captured".equals(payment.get("status"))) {
+                            captured = true;
+                        }
+                    }
+                    if (!captured) {
+                        log.warn(
+                                "Razorpay order {} is paid but has no captured payment",
+                                orderId
+                        );
                     }
                 }
 
@@ -127,6 +131,12 @@ public class PaymentReconciler {
 
                 log.error(
                         "Razorpay reconciliation failed for booking {}",
+                        booking.getId(),
+                        e
+                );
+            } catch (ApplicationException e) {
+                log.error(
+                        "Payment reconciliation failed for booking {}",
                         booking.getId(),
                         e
                 );

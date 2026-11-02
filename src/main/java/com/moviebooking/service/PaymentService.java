@@ -61,6 +61,38 @@ public class PaymentService {
     }
 
     @Transactional
+    public void processReconciledPayment(
+            String orderId,
+            com.razorpay.Payment razorpayPayment) {
+        if (!orderId.equals(razorpayPayment.get("order_id"))) {
+            throw new ApplicationException(
+                    "Payment does not belong to this order",
+                    HttpStatus.BAD_REQUEST
+            );
+        }
+
+        Object amountValue = razorpayPayment.get("amount");
+        if (!(amountValue instanceof Number amountInPaise)) {
+            throw new ApplicationException(
+                    "Razorpay payment is missing its amount",
+                    HttpStatus.BAD_GATEWAY
+            );
+        }
+
+        Payment payment = recordPayment(
+                orderId,
+                razorpayPayment.get("id"),
+                amountInPaise.longValue(),
+                toPaymentStatus(razorpayPayment.get("status")),
+                razorpayPayment.get("error_description")
+        );
+
+        if (payment.getStatus() == PaymentStatus.SUCCESS) {
+            applyPaymentStatus(payment);
+        }
+    }
+
+    @Transactional
     public void processWebhook(String payload, String signature) {
         if (!razorpayService.verifyWebhookSignature(payload, signature)) {
             throw new ApplicationException(
