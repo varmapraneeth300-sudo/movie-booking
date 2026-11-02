@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 @Getter
 @AllArgsConstructor
@@ -12,4 +13,5 @@ public class RazorpayOrderResponse {
     private String orderId;
     private BigDecimal amount;
     private String currency;
+    private LocalDateTime paymentInitiationExpiresAt;
 }

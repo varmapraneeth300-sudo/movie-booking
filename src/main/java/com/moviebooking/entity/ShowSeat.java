@@ -51,5 +51,11 @@ public class ShowSeat {
     private long price;
 
     @Column
+    private Long heldByUserId;
+
+    @Column
+    private String holdId;
+
+    @Column
     private LocalDateTime holdExpiresAt;
 }

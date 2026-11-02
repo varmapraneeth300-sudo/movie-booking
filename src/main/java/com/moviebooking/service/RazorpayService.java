@@ -17,6 +17,7 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
@@ -33,7 +34,7 @@ public class RazorpayService {
         this.razorpayClient = razorpayClient;
     }
 
-    public RazorpayOrderResponse createOrder(BigDecimal amountInRupees)
+    public RazorpayOrderResponse createOrder(BigDecimal amountInRupees, LocalDateTime orderExpiry)
             throws Exception {
 
         long amountInPaise = amountInRupees
@@ -54,12 +55,15 @@ public class RazorpayService {
         return new RazorpayOrderResponse(
                 order.get("id"),
                 amountInRupees,
-                order.get("currency")
+                order.get("currency"),
+                orderExpiry
         );
     }
 
     public PaymentVerificationResponse verifyPayment(
             PaymentVerificationRequest request) {
+
+        System.out.println("entered payment verification");
 
         try {
 

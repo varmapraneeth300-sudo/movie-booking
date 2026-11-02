@@ -16,4 +16,5 @@ public class ShowSeatResponse {
     private SeatType seatType;
     private Integer price;
     private ShowSeatStatus status;
+    private boolean isOwnedByCurrentUser;
 }

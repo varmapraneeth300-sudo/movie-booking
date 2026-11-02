@@ -59,6 +59,8 @@ public class Booking {
         updatedAt = now;
     }
 
+    private LocalDateTime paymentInitiationExpiresAt;
+
     @PreUpdate
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();

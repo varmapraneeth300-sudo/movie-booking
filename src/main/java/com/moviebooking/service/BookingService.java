@@ -8,16 +8,14 @@ import com.moviebooking.entity.enums.ShowStatus;
 import com.moviebooking.exception.ApplicationException;
 import com.moviebooking.repo.*;
 import jakarta.transaction.Transactional;
-import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
+import java.time.LocalDateTime;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
@@ -81,7 +79,7 @@ public class BookingService {
                             HttpStatus.NOT_FOUND
                     ));
 
-            if (showSeat.getStatus() != ShowSeatStatus.AVAILABLE) {
+            if (showSeat.getStatus() != ShowSeatStatus.AVAILABLE && !Objects.equals(showSeat.getHeldByUserId(), getUser().getId())) {
                 throw new ApplicationException(
                         "Seat " + seatId + " is not available",
                         HttpStatus.CONFLICT
@@ -99,8 +97,10 @@ public class BookingService {
         // todo : call Razorpay
         RazorpayOrderResponse razorpayOrderResponse;
         try {
-            razorpayOrderResponse = razorpayService.createOrder(totalAmount);
+            LocalDateTime orderExpiry = LocalDateTime.now().plusMinutes(1);
             Booking booking = new Booking();
+            booking.setPaymentInitiationExpiresAt(orderExpiry);
+            razorpayOrderResponse = razorpayService.createOrder(totalAmount, orderExpiry);
             List<BookingSeat> bookingSeats = new ArrayList<>();
             booking.setStatus(BookingStatus.PENDING);
             booking.setRazorpayOrderId(razorpayOrderResponse.getOrderId());
@@ -219,7 +219,9 @@ public class BookingService {
 
             ShowSeat showSeat =
                     bookingSeat.getShowSeat();
-
+            showSeat.setHeldByUserId(null);
+            showSeat.setHoldExpiresAt(null);
+            showSeat.setHoldId(null);
             showSeat.setStatus(ShowSeatStatus.BOOKED);
         }
 
@@ -271,5 +273,138 @@ public class BookingService {
 
         String username = authentication.getName();
         return userRepo.findByUsername(username).orElseThrow(() -> new ApplicationException("user not found", HttpStatus.NOT_FOUND));
+    }
+
+    @Transactional
+    public void holdSeat(LockSeatRequestDto lockSeatRequest) {
+        User user = getUser();
+        Show show = showRepo.findById(lockSeatRequest.getShowId()).orElseThrow(() -> new ApplicationException("show not found", HttpStatus.NOT_FOUND));
+        ShowSeat selectedShowSeat = showSeatRepo.findByShowAndSeatId(show, lockSeatRequest.getSeatId()).orElseThrow(() -> new ApplicationException("show seat not found", HttpStatus.NOT_FOUND));
+        if (selectedShowSeat.getStatus() != ShowSeatStatus.AVAILABLE)
+            throw new ApplicationException("Selected Show Seat has been already booked.", HttpStatus.NOT_FOUND);
+        List<com.moviebooking.entity.ShowSeat> heldShowSeatsByExistingUser = showSeatRepo.findByShowAndHeldByUserIdAndStatus(show, user.getId(), ShowSeatStatus.HELD);
+        if (!heldShowSeatsByExistingUser.isEmpty())
+            selectedShowSeat.setHoldId(heldShowSeatsByExistingUser.get(0).getHoldId());
+        else
+            selectedShowSeat.setHoldId(UUID.randomUUID().toString());
+        selectedShowSeat.setHeldByUserId(user.getId());
+        selectedShowSeat.setStatus(ShowSeatStatus.HELD);
+        heldShowSeatsByExistingUser.add(selectedShowSeat);
+        LocalDateTime now = LocalDateTime.now();
+        for (ShowSeat toBeheldShowSeat : heldShowSeatsByExistingUser) {
+            toBeheldShowSeat.setHoldExpiresAt(now.plusMinutes(5));
+        }
+    }
+
+    @Transactional
+    public void releaseSeat(ReleaseSeatRequestDto releaseSeatRequest) {
+        User user = getUser();
+        Show show = showRepo.findById(releaseSeatRequest.getShowId()).orElseThrow(() -> new ApplicationException("show not found", HttpStatus.NOT_FOUND));
+        ShowSeat showSeatToBeReleased = showSeatRepo.findByShowAndSeatId(show, releaseSeatRequest.getSeatId()).orElseThrow(() -> new ApplicationException("show seat not found", HttpStatus.NOT_FOUND));
+        if (!Objects.equals(
+                user.getId(),
+                showSeatToBeReleased.getHeldByUserId()))
+            throw new ApplicationException("user not allowed to perform this operation", HttpStatus.FORBIDDEN);
+
+        if (showSeatToBeReleased.getStatus() != ShowSeatStatus.HELD) {
+            throw new ApplicationException(
+                    "Seat is not currently held",
+                    HttpStatus.BAD_REQUEST
+            );
+        }
+
+        showSeatToBeReleased.setHeldByUserId(null);
+        showSeatToBeReleased.setStatus(ShowSeatStatus.AVAILABLE);
+        showSeatToBeReleased.setHoldExpiresAt(null);
+        showSeatToBeReleased.setHoldId(null);
+    }
+
+    @Transactional
+    public void confirmBooking(Long bookingId) {
+
+        Booking booking = bookingRepo.findById(bookingId)
+                .orElseThrow();
+
+        if (booking.getStatus() != BookingStatus.PENDING) {
+            return;
+        }
+
+        List<BookingSeat> bookingSeats =
+                bookingSeatRepo.findByBooking(booking);
+
+        // Confirm only if every seat is still held
+        // and its hold has not expired.
+        LocalDateTime now = LocalDateTime.now();
+
+        boolean seatsAvailableForConfirmation =
+                !bookingSeats.isEmpty()
+                        && bookingSeats.stream().allMatch(bs -> {
+                    ShowSeat seat = bs.getShowSeat();
+
+                    return seat.getStatus() == ShowSeatStatus.HELD
+                            && seat.getHoldExpiresAt() != null
+                            && seat.getHoldExpiresAt().isAfter(now);
+                });
+
+        if (!seatsAvailableForConfirmation) {
+            booking.setStatus(BookingStatus.PAYMENT_UNRESOLVED);
+            return;
+        }
+
+        for (BookingSeat bookingSeat : bookingSeats) {
+
+            ShowSeat showSeat = bookingSeat.getShowSeat();
+
+            showSeat.setStatus(ShowSeatStatus.BOOKED);
+            showSeat.setHeldByUserId(null);
+            showSeat.setHoldExpiresAt(null);
+            showSeat.setHoldId(null);
+        }
+
+        booking.setStatus(BookingStatus.CONFIRMED);
+    }
+
+    @Transactional
+    public void expireBooking(Long bookingId) {
+
+        Booking booking = bookingRepo.findById(bookingId)
+                .orElseThrow();
+
+        if (booking.getStatus() == BookingStatus.PENDING) {
+            booking.setStatus(BookingStatus.EXPIRED);
+        }
+    }
+
+    @Transactional
+    public void markPaymentUnresolved(Long bookingId) {
+
+        Booking booking = bookingRepo.findById(bookingId)
+                .orElseThrow();
+
+        if (booking.getStatus() == BookingStatus.PENDING) {
+            booking.setStatus(BookingStatus.PAYMENT_UNRESOLVED);
+        }
+    }
+
+    @Transactional
+    public void markRefundRequired(Long bookingId) {
+
+        Booking booking = bookingRepo.findById(bookingId)
+                .orElseThrow();
+
+        if (booking.getStatus() == BookingStatus.PAYMENT_UNRESOLVED) {
+            booking.setStatus(BookingStatus.REFUND_REQUIRED);
+        }
+    }
+
+    @Transactional
+    public void markUnresolvedPaymentFailed(Long bookingId) {
+
+        Booking booking = bookingRepo.findById(bookingId)
+                .orElseThrow();
+
+        if (booking.getStatus() == BookingStatus.PAYMENT_UNRESOLVED) {
+            booking.setStatus(BookingStatus.FAILED);
+        }
     }
 }

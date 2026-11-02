@@ -10,4 +10,5 @@ import java.util.List;
 @Repository
 public interface BookingSeatRepo extends JpaRepository<BookingSeat, Long> {
     List<BookingSeat> findByBooking(Booking booking);
+    List<BookingSeat> findByBookingId(Long bookingId);
 }

@@ -1,8 +1,7 @@
 package com.moviebooking.entity.enums;
 
 public enum PaymentStatus {
-
-    CREATED,
+    UNKNOWN,
     PENDING,
     SUCCESS,
     FAILED,

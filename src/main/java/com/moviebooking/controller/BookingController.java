@@ -3,6 +3,7 @@ package com.moviebooking.controller;
 import com.moviebooking.dto.*;
 import com.moviebooking.service.BookingService;
 import com.moviebooking.service.RazorpayService;
+import com.moviebooking.service.ReleaseSeatRequestDto;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -14,6 +15,11 @@ public class BookingController {
 
     private final BookingService bookingService;
     private final RazorpayService razorpayService;
+
+    @PostMapping("/hold")
+    public void lockSeat(@RequestBody LockSeatRequestDto lockSeatRequest) {
+        bookingService.holdSeat(lockSeatRequest);
+    }
 
     @PostMapping("/initiate")
     public RazorpayOrderResponse initiateBooking(
@@ -47,5 +53,10 @@ public class BookingController {
             @PathVariable Long bookingId) {
 
         return bookingService.cancelBooking(bookingId);
+    }
+
+    @DeleteMapping("/hold")
+    public void releaseSeat(@RequestBody ReleaseSeatRequestDto releaseSeatRequest) {
+        bookingService.releaseSeat(releaseSeatRequest);
     }
 }
